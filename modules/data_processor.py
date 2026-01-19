@@ -1,0 +1,197 @@
+# ==========================================================
+# Файл: data_processor.py
+# Описание: Модуль загрузки, валидации и предварительного анализа данных.
+#           Обеспечивает адаптацию названий столбцов, проверку форматов,
+#           агрегацию данных по дням и базовый статистический анализ.
+# Соответствует:
+#   - Диаграмме последовательности (Sequence Diagram) загрузки данных
+#   - Функциональным требованиям ФТ1.1-ФТ1.4
+#   - Требованиям к данным ТД2.2 (адаптация столбцов), ТД1.2 (формат дат)
+#   - Интерфейсным требованиям ИТ4.3 (понятные сообщения об ошибках)
+# Автор:
+# Дата: 2025-12-12
+# Версия: 1.0
+# ==========================================================
+
+import pandas as pd
+import numpy as np
+import streamlit as st
+import plotly.graph_objects as go
+from datetime import datetime
+import logging
+
+
+def adapt_dataset_columns(df):
+    """Универсальная адаптация датасета (реализует ТД2.2)"""
+    df_adapted = df.copy()
+    df_adapted.columns = df_adapted.columns.str.lower().str.strip()
+
+    column_mapping = {
+        'quantity': 'sales', 'units': 'sales', 'volume': 'sales', 'qty': 'sales',
+        'sales_quantity': 'sales', 'units_sold': 'sales', 'sku': 'product_id',
+        'item_id': 'product_id', 'product': 'product_id', 'price_unit': 'price',
+        'unit_price': 'price', 'sales_price': 'price', 'order_date': 'date',
+        'sales_date': 'date',
+    }
+
+    for old_col, new_col in column_mapping.items():
+        if old_col in df_adapted.columns and new_col not in df_adapted.columns:
+            df_adapted[new_col] = df_adapted[old_col]
+
+    return df_adapted
+
+
+def aggregate_daily_sales(df):
+    """Агрегирует данные по дням и товарам (соответствует ТД2.1)"""
+    required_cols = ['date', 'product_id', 'sales']
+    if not all(col in df.columns for col in required_cols):
+        return df
+
+    aggregation_dict = {'sales': 'sum'}
+    if 'price' in df.columns:
+        # Для цены используем mean с skipna=True, чтобы NaN не влияли на агрегацию
+        aggregation_dict['price'] = 'mean'  # pandas mean по умолчанию skipna=True
+
+    aggregated = df.groupby(['date', 'product_id']).agg(aggregation_dict).reset_index()
+    return aggregated
+
+
+class DataValidator:
+    """Модуль загрузки и валидации данных (реализует требования ФТ1)"""
+
+    def __init__(self):
+        self.required_columns = ['date', 'product_id', 'sales']
+
+    def validate_data(self, df):
+        """Валидация данных"""
+        df = adapt_dataset_columns(df)
+
+        # Проверка обязательных полей (ФТ1.2)
+        missing = [col for col in self.required_columns if col not in df.columns]
+        if missing:
+            raise ValueError(f"Отсутствуют обязательные поля: {missing}")
+
+        # Проверка на пустые ID товаров
+        if df['product_id'].isna().any():
+            nan_count = df['product_id'].isna().sum()
+            raise ValueError(
+                f"Обнаружены пустые идентификаторы товаров!\n\n"
+                f"• Количество пустых ID: {nan_count}\n"
+                f"• Все идентификаторы товаров должны быть заполнены\n\n"
+            )
+
+        # Оптимизированная проверка длины идентификатора товара
+        # Ищет первый длинный ID
+        for idx, pid in df['product_id'].items():
+            pid_str = str(pid)
+            if len(pid_str) > 100:
+                # Нашли первый длинный ID - сразу выходим
+                display_id = pid_str[:50] + "..." if len(pid_str) > 50 else pid_str
+                raise ValueError(
+                    f"Слишком длинный идентификатор товара!\n\n"
+                    f"• Максимальная длина: 100 символов\n"
+                )
+
+        try:
+            # Валидация формата даты (ФТ1.2, ТД1.2)
+            df['date'] = pd.to_datetime(df['date'], dayfirst=True, errors='raise')
+
+        except Exception as e:
+            import logging
+            logging.error(f"Ошибка парсинга даты: {e}")
+
+            raise ValueError(
+                "Некорректный формат даты. Поддерживаемые форматы: DD.MM.YYYY или YYYY-MM-DD.")
+
+        # Обработка отрицательных значений продаж (бизнес-правило 6 из Таблицы 3.9)
+        if (df['sales'] < 0).any():
+            df['sales'] = df['sales'].clip(lower=0)
+
+        if pd.api.types.is_float_dtype(df['sales']):
+            df['sales'] = df['sales'].round().astype(int)
+
+        # ===== ВАЛИДАЦИЯ И ФОРМАТИРОВАНИЕ ЦЕНЫ (денежный формат) =====
+        if 'price' in df.columns:
+            try:
+                # 1. Преобразуем к числовому типу (денежный формат)
+                df['price'] = pd.to_numeric(df['price'], errors='coerce')
+
+                # 2. Определяем некорректные цены (≤ 0 согласно ТД1.8)
+                invalid_price_mask = df['price'] <= 0
+                invalid_count = invalid_price_mask.sum()
+
+                if invalid_count > 0:
+                    # ЗАМЕНЯЕМ некорректные цены на NaN (не удаляем строки!)
+                    df.loc[invalid_price_mask, 'price'] = np.nan
+
+                    st.warning(f"""
+                    **Внимание: Обнаружены некорректные данные о цене**
+
+                    • Найдено записей с ценой ≤ 0: **{invalid_count}**
+                    • **Важно:** Продажи сохранены и будут использованы для прогнозирования
+                    • Цена заменена на "неизвестную" для этих записей
+                    • Сценарный анализ доступен только по дням с корректной ценой
+
+                    **Рекомендация:** Для точного сценарного анализа загрузите файл 
+                    с корректными ценами (все значения > 0).
+                    """)
+
+                # 3. Округляем до 2 знаков после запятой (денежный формат)
+                df['price'] = df['price'].round(2)
+
+            except Exception as e:
+                raise ValueError(f"Ошибка обработки столбца 'price': {e}")
+        # ===== КОНЕЦ ВАЛИДАЦИИ ЦЕНЫ =====
+
+        # Агрегируем данные (цена с NaN не влияет на агрегацию)
+        df = aggregate_daily_sales(df)
+
+        # Проверка достаточности данных (ФТ1.4) - после агрегации
+        date_range = df['date'].max() - df['date'].min()
+        unique_days = df['date'].nunique()
+        if unique_days < 30:
+            error_text = f"""
+                **Недостаточно данных для прогноза!**
+
+                • В файле всего **{unique_days}** уникальных дней  
+                • Требуется минимум **30 дней** для базового прогноза  
+                • Для точного прогноза рекомендуется **90+ дней**
+                """
+            st.markdown(error_text)
+            st.stop()
+
+        if date_range.days < 90:
+            st.warning(f"Мало данных: всего {date_range.days} дней. "
+                       f"Рекомендуется минимум 90 дней (3 месяца) для точного прогноза.")
+        elif date_range.days < 180:
+            st.info(f"Период данных: {date_range.days} дней. "
+                    f"Для учета сезонности рекомендуется 180+ дней.")
+
+        return df
+
+
+class DataAnalyzer:
+    """Анализатор данных (реализует визуализацию из ФТ5)"""
+
+    def analyze_dataset(self, df):
+        analysis = {
+            'total_records': len(df),
+            'unique_products': df['product_id'].nunique(),
+            'date_range': f"{df['date'].min().strftime('%d.%m.%Y')} - {df['date'].max().strftime('%d.%m.%Y')}",
+            'mean_sales': df['sales'].mean(),
+            'max_sales': df['sales'].max(),
+            'min_sales': df['sales'].min(),
+            'median_sales': df['sales'].median(),
+            'std_sales': df['sales'].std()
+        }
+        if 'price' in df.columns:
+            # Используем только корректные цены (не NaN) для статистики
+            valid_prices = df['price'].dropna()
+            if len(valid_prices) > 0:
+                analysis['mean_price'] = valid_prices.mean()
+                analysis['price_range'] = f"{valid_prices.min():.2f} - {valid_prices.max():.2f} ед."
+                analysis['valid_price_records'] = len(valid_prices)
+                analysis['total_price_records'] = len(df)
+            else:
+                analysis['price_info'] = "Нет корректных данных о цене для анализа"
+        return analysis
