@@ -1,15 +1,7 @@
 # Demand Forecasting System (FMCG)
-
-[![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://your-app.streamlit.app)
-
 > Автоматизированная ML-система для прогнозирования спроса и сценарного анализа цен в FMCG-ритейле на базе Random Forest.
 
 ---
-
-## Быстрый старт
-
-### Онлайн-демо
-[Открыть приложение на Streamlit Cloud](здесь будет ссылка)
 
 ### Тестовые данные для загрузки
 - **[FMCG_2022_2024.csv](https://github.com/Darya6/project_demand_forecasting/raw/main/test_data/demo/FMCG_2022_2024.csv)** (~45 МБ) 
@@ -46,13 +38,38 @@
 - [**Методология тестирования**](./test_data/README.md) — описание тестовых наборов и скриптов.
 
 ---
+## Запуск проекта
 
-## Локальный запуск
+В корне проекта подготовлены автоматические скрипты:
+
+### Windows:
+Запустите файл **`run_windows.bat`** двойным кликом.
+
+### Linux / macOS:
+Выполните в терминале:
 ```
-git clone https://github.com/ваш-username/project_demand_forecasting.git
+chmod +x run_unix.sh
+./run_unix.sh
+```
+---
+## Для запуска вручную:
+```
+#Клонирование репозитория
+git clone https://github.com/Darya6/project_demand_forecasting.git
 cd project_demand_forecasting
+
+# Создание и активация виртуального окружения
 python -m venv venv
-source venv/bin/activate  # Для Windows: venv\Scripts\activate
+# Для Windows:
+venv\Scripts\activate
+# Для Linux/Mac:
+source venv/bin/activate
+
+# Установка зависимостей
 pip install -r requirements.txt
+
+# Запуск приложения
 streamlit run app.py
+
+#После запуска интерфейс будет доступен по адресу: http://localhost:8501
 ```
