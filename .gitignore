@@ -55,8 +55,11 @@ htmlcov/
 .hypothesis/
 
 app_test.py
+
 test_*.py
-!test_data/tests/test_*.py
+!test_data/scripts/test_*.py
+!test_data/scripts/generate_demo_data.py
+
 
 .streamlit/secrets.toml
 
